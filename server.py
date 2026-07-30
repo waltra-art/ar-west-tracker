@@ -153,6 +153,9 @@ def init_db():
     conn.close()
     print("Database initialized successfully!")
 
+# Initialize database when module is loaded (for gunicorn)
+init_db()
+
 # ============ FULL DATA ENDPOINTS ============
 
 @app.route('/api/data', methods=['GET'])

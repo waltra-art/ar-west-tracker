@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: ar-west-tracker
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn server:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: AR_TRACKER_API_KEY
+        value: arwest-cf-2026-internal
+      - key: PYTHON_VERSION
+        value: 3.11.0
