@@ -3,10 +3,9 @@ AR West Tracker - Shared Server (Amazon Internal Only)
 A Flask server with SQLite database for multi-user collaboration.
 SECURED: API key required for all data endpoints.
 Deployed on: Render.com
-Run with: python server.py
 """
 
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request, jsonify, render_template_string, send_from_directory
 from flask_cors import CORS
 from functools import wraps
 import sqlite3
@@ -20,28 +19,7 @@ app = Flask(__name__)
 # ============ SECURITY CONFIGURATION ============
 
 # API Key - Set this as environment variable on Render.com
-# Render Dashboard -> Environment -> Add AR_TRACKER_API_KEY
 API_KEY = os.environ.get('AR_TRACKER_API_KEY', 'arwest-cf-2026-internal')
-
-# Allowed origins - Amazon domains only (for CORS)
-ALLOWED_ORIGINS = [
-    r'https?://.*\.amazon\.com',
-    r'https?://.*\.amazon\.dev',
-    r'https?://.*\.a2z\.com',
-    r'https?://.*\.corp\.amazon\.com',
-    r'https?://localhost(:\d+)?',
-    r'https?://127\.0\.0\.1(:\d+)?',
-    r'^null$',  # Allow local file://
-]
-
-def is_allowed_origin(origin):
-    """Check if origin matches allowed Amazon domains."""
-    if not origin:
-        return True  # Allow requests without origin (direct API calls)
-    for pattern in ALLOWED_ORIGINS:
-        if re.match(pattern, origin, re.IGNORECASE):
-            return True
-    return False
 
 def require_api_key(f):
     """Decorator to require valid API key for access."""
@@ -51,7 +29,6 @@ def require_api_key(f):
         api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
         
         if not api_key:
-            app.logger.warning(f"Access denied - No API key provided")
             return jsonify({
                 'success': False,
                 'error': 'API key required. Add X-API-Key header.',
@@ -59,24 +36,174 @@ def require_api_key(f):
             }), 401
         
         if api_key != API_KEY:
-            app.logger.warning(f"Access denied - Invalid API key")
             return jsonify({
                 'success': False,
                 'error': 'Invalid API key.',
-                'hint': 'Check your API key in Server Settings.'
+                'hint': 'Check your API key.'
             }), 403
         
         return f(*args, **kwargs)
     return decorated_function
 
-# Configure CORS - allow Amazon domains
+# Configure CORS
 CORS(app, resources={
     r"/api/*": {
-        "origins": "*",  # We validate via API key instead
+        "origins": "*",
         "methods": ["GET", "POST", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "X-API-Key"]
     }
 })
+
+# ============ LOGIN PAGE ============
+LOGIN_PAGE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR West Tracker - Login</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            font-family: 'Segoe UI', sans-serif; 
+            background: linear-gradient(135deg, #1b2a4a 0%, #0f172a 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-box {
+            background: #fff;
+            border-radius: 16px;
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+        .logo { font-size: 48px; margin-bottom: 16px; }
+        h1 { color: #1b2a4a; font-size: 24px; margin-bottom: 8px; }
+        .subtitle { color: #64748b; font-size: 14px; margin-bottom: 32px; }
+        .input-group { margin-bottom: 20px; text-align: left; }
+        label { display: block; font-weight: 600; color: #334155; margin-bottom: 8px; font-size: 14px; }
+        input {
+            width: 100%;
+            padding: 14px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.2s;
+        }
+        input:focus { outline: none; border-color: #3b82f6; }
+        .btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(59,130,246,0.4); }
+        .error { 
+            background: #fef2f2; 
+            color: #dc2626; 
+            padding: 12px; 
+            border-radius: 8px; 
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+        }
+        .error.show { display: block; }
+        .hint { color: #94a3b8; font-size: 12px; margin-top: 24px; }
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <div class="logo">🔐</div>
+        <h1>AR West Tracker</h1>
+        <p class="subtitle">Amazon Internal Only</p>
+        
+        <div id="error" class="error"></div>
+        
+        <form onsubmit="return handleLogin(event)">
+            <div class="input-group">
+                <label>API Key</label>
+                <input type="password" id="apiKey" placeholder="Enter your API key" required>
+            </div>
+            <div class="input-group">
+                <label>Your Name</label>
+                <input type="text" id="userName" placeholder="Enter your name" required>
+            </div>
+            <button type="submit" class="btn">🚀 Access Tracker</button>
+        </form>
+        
+        <p class="hint">Get the API key from your team lead</p>
+    </div>
+    
+    <script>
+        // Check if already logged in
+        var savedKey = localStorage.getItem('ar-west-api-key');
+        var savedName = localStorage.getItem('ar-west-user-name');
+        if (savedKey && savedName) {
+            verifyAndRedirect(savedKey, savedName);
+        }
+        
+        function handleLogin(e) {
+            e.preventDefault();
+            var apiKey = document.getElementById('apiKey').value.trim();
+            var userName = document.getElementById('userName').value.trim();
+            verifyAndRedirect(apiKey, userName);
+            return false;
+        }
+        
+        async function verifyAndRedirect(apiKey, userName) {
+            var errorEl = document.getElementById('error');
+            errorEl.classList.remove('show');
+            
+            try {
+                var response = await fetch('/api/status', {
+                    headers: { 'X-API-Key': apiKey }
+                });
+                var result = await response.json();
+                
+                if (result.api_key_valid) {
+                    localStorage.setItem('ar-west-api-key', apiKey);
+                    localStorage.setItem('ar-west-user-name', userName);
+                    window.location.href = '/app';
+                } else {
+                    throw new Error('Invalid API key');
+                }
+            } catch (err) {
+                localStorage.removeItem('ar-west-api-key');
+                errorEl.textContent = '❌ Invalid API key. Please try again.';
+                errorEl.classList.add('show');
+            }
+        }
+    </script>
+</body>
+</html>
+'''
+
+# ============ ROUTES ============
+
+@app.route('/')
+def index():
+    """Show login page."""
+    return render_template_string(LOGIN_PAGE)
+
+@app.route('/app')
+def app_page():
+    """Serve the main app (requires valid API key in localStorage - checked client-side)."""
+    # Read and serve the app HTML
+    try:
+        with open('app.html', 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        return "App not found. Please deploy app.html", 404
 
 DATABASE = 'ar_west_tracker.db'
 
